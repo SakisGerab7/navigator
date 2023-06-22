@@ -27,6 +27,36 @@ int compare(const void *fst, const void *snd) {
     return strcmp(fst_file.name, snd_file.name);
 }
 
+char *path_init() {
+    char *username = getlogin();
+    char *path = calloc(strlen("/home/") + strlen(username) + 1, sizeof(char));
+    sprintf(path, "/home/%s", username);
+    return path;
+}
+
+char *path_update(char *path, char *addition) {
+    char *new_path;
+    size_t new_size;
+
+    if (strcmp(addition, "..") == 0) {
+        char *pos = strrchr(path, '/');
+        if (pos != NULL) {
+            new_size = (size_t) (pos - path);
+            if (new_size == 0) new_size = 1;
+            new_path = calloc(new_size + 1, sizeof(char));
+            strncpy(new_path, path, new_size);
+            free(path);
+        } 
+    } else {
+        new_size = strlen(path) + strlen(addition) + 1;
+        new_path = realloc(path, (new_size + 1) * sizeof(char));
+        strcat(new_path, "/");
+        strcat(new_path, addition);
+    }
+
+    return new_path;
+}
+
 Directory *directory_init(char *path) {
     Directory *dir = malloc(sizeof(Directory));
     dir->path = path;
@@ -41,7 +71,10 @@ Directory *directory_init(char *path) {
     struct dirent *entry;
     File file;
     while (entry = readdir(temp_dir)) {
-        if (entry->d_name[0] == '.' && strcmp(entry->d_name, "..") != 0) continue;
+        if (entry->d_name[0] == '.') {
+            if (strcmp(path, "/") == 0) continue;
+            if (strcmp(entry->d_name, "..") != 0) continue;
+        }
 
         strncpy(file.name, entry->d_name, 20);
         switch (entry->d_type) {
@@ -76,14 +109,12 @@ int main() {
     start_color();
     init_pair(1, COLOR_BLACK, COLOR_WHITE);
 
-    char path[256];
-    sprintf(path, "/home/%s", getlogin());
+    char *path = path_init();
 
     size_t width = getmaxx(stdscr);
     size_t height = getmaxy(stdscr);
 
     Directory *dir = directory_init(path);
-    bool dir_changed = false;
     char input;
 
     while (true) {
@@ -110,15 +141,15 @@ int main() {
 
             if (i == dir->len - 1) break;
         }
-        refresh();
 
+        refresh();
         move(dir->cursor, 0);
         input = getch();
 
         switch (input) {
             case 'q': case 'Q': {
                 directory_free(dir);
-                refresh();
+                free(path);
                 endwin();
                 return 0;
             }
@@ -135,14 +166,14 @@ int main() {
             }
             break;
             case '\n': {
-                if (strcmp(dir->files[dir->cursor].type, "Directory") == 0) {
-                    strcat(path, "/");
-                    strcat(path, dir->files[dir->cursor].name);
+                File *file = &dir->files[dir->cursor];
+                if (strcmp(file->type, "Directory") == 0) {
+                    path = path_update(path, file->name);
                     directory_free(dir);
                     dir = directory_init(path);
-                } else if (strcmp(dir->files[dir->cursor].type, "File") == 0) {
+                } else if (strcmp(file->type, "File") == 0) {
                     char command[256];
-                    sprintf(command, "code %s/%s", path, dir->files[dir->cursor].name);
+                    sprintf(command, "code %s/%s", path, file->name);
                     system(command);
                 }
             }
