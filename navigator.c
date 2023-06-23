@@ -6,16 +6,27 @@
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 typedef struct File {
-    char name[20], type[10];
+    enum {
+        FILE_REGULAR,
+        FILE_DIRECTORY
+    } type;
+    char name[20];
+    size_t size;
 } File;
 
 typedef struct Directory {
     char *path;
     File *files;
-    size_t len, cap, cursor;
+    size_t len, cap, cursor, maxname;
 } Directory;
+
+static const char *FILE_TYPE_STR[] = {
+    [FILE_REGULAR]   = "File",
+    [FILE_DIRECTORY] = "Directory"
+};
 
 int compare(const void *fst, const void *snd) {
     File fst_file = *(File *) fst;
@@ -29,7 +40,7 @@ int compare(const void *fst, const void *snd) {
 
 char *path_init() {
     char *username = getlogin();
-    char *path = calloc(strlen("/home/") + strlen(username) + 1, sizeof(char));
+    char *path = calloc(strlen(username) + 7, sizeof(char));
     sprintf(path, "/home/%s", username);
     return path;
 }
@@ -63,24 +74,32 @@ Directory *directory_init(char *path) {
     dir->cap = 10;
     dir->len = 0;
     dir->cursor = 0;
+    dir->maxname = 0;
     dir->files = malloc(dir->cap * sizeof(File));
 
     DIR *temp_dir = opendir(path);
     if (temp_dir == NULL) return NULL;
 
     struct dirent *entry;
+    struct stat sb;
     File file;
     while (entry = readdir(temp_dir)) {
+        stat(entry->d_name, &sb);
         if (entry->d_name[0] == '.') {
             if (strcmp(path, "/") == 0) continue;
             if (strcmp(entry->d_name, "..") != 0) continue;
         }
 
+
+        file.size = sb.st_size;
         strncpy(file.name, entry->d_name, 20);
         switch (entry->d_type) {
-            case DT_REG: strncpy(file.type, "File", 10); break;
-            case DT_DIR: strncpy(file.type, "Directory", 10); break;
+            case DT_REG: file.type = FILE_REGULAR; break;
+            case DT_DIR: file.type = FILE_DIRECTORY; break;
         }
+
+        size_t fname_size = strlen(file.name);
+        dir->maxname = fname_size > dir->maxname ? fname_size : dir->maxname;
 
         dir->files[dir->len++] = file;
 
@@ -108,6 +127,7 @@ int main() {
 
     start_color();
     init_pair(1, COLOR_BLACK, COLOR_WHITE);
+    init_pair(2, COLOR_WHITE, 8 | COLOR_BLACK);
 
     char *path = path_init();
 
@@ -119,7 +139,14 @@ int main() {
 
     while (true) {
         clear();
-        mvprintw(height - 1, 0, "[Sakis Navigator] Path: %s, Cursor: %2d", path, dir->cursor);
+
+        char bottom_text[width + 1];
+        sprintf(bottom_text, " [Sakis Navigator] Path: %s, Cursor: %2lu", path, dir->cursor);
+        sprintf(bottom_text, "%s%-*s", bottom_text, (uint32_t) (width - strlen(bottom_text)), " ");
+
+        attron(COLOR_PAIR(2));
+        mvprintw(height - 1, 0, "%s", bottom_text);
+        attroff(COLOR_PAIR(2));
 
         size_t start = 0;
         if (dir->cursor >= height - 1) {
@@ -133,7 +160,11 @@ int main() {
                 attron(COLOR_PAIR(1));
             }
 
-            printw("[%2d] %-20s %-10s", start + i, dir->files[start + i].name, dir->files[start + i].type);
+            File *file = &dir->files[start + i];
+            printw(" [%2d]  %-*s  %-10s", start + i, dir->maxname, file->name, FILE_TYPE_STR[file->type]);
+            if (file->type == FILE_REGULAR) {
+                printw("  %lu KB ", file->size / 1024);
+            }
             
             if (i == dir->cursor || (start > 0 && i == height - 2)) {
                 attroff(COLOR_PAIR(1));
@@ -167,13 +198,13 @@ int main() {
             break;
             case '\n': {
                 File *file = &dir->files[dir->cursor];
-                if (strcmp(file->type, "Directory") == 0) {
+                if (file->type == FILE_DIRECTORY) {
                     path = path_update(path, file->name);
                     directory_free(dir);
                     dir = directory_init(path);
-                } else if (strcmp(file->type, "File") == 0) {
+                } else if (file->type == FILE_REGULAR) {
                     char command[256];
-                    sprintf(command, "code %s/%s", path, file->name);
+                    sprintf(command, "vim %s/%s", path, file->name);
                     system(command);
                 }
             }
