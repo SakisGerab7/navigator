@@ -7,6 +7,8 @@
 #include <ctype.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <math.h>
 
 typedef struct File {
     enum {
@@ -20,7 +22,8 @@ typedef struct File {
 typedef struct Directory {
     char *path;
     File *files;
-    size_t len, cap, cursor, maxname;
+    size_t len, cap, cursor;
+    size_t maxname, maxsize;
 } Directory;
 
 static const char *FILE_TYPE_STR[] = {
@@ -75,6 +78,7 @@ Directory *directory_init(char *path) {
     dir->len = 0;
     dir->cursor = 0;
     dir->maxname = 0;
+    dir->maxsize = 0;
     dir->files = malloc(dir->cap * sizeof(File));
 
     DIR *temp_dir = opendir(path);
@@ -83,15 +87,17 @@ Directory *directory_init(char *path) {
     struct dirent *entry;
     struct stat sb;
     File file;
-    while (entry = readdir(temp_dir)) {
-        stat(entry->d_name, &sb);
+    while ((entry = readdir(temp_dir)) != NULL) {
         if (entry->d_name[0] == '.') {
             if (strcmp(path, "/") == 0) continue;
             if (strcmp(entry->d_name, "..") != 0) continue;
         }
 
+        char file_path[256];
+        sprintf(file_path, "%s/%s", path, entry->d_name);
+        stat(file_path, &sb);
+        file.size = sb.st_size / 1024;
 
-        file.size = sb.st_size;
         strncpy(file.name, entry->d_name, 20);
         switch (entry->d_type) {
             case DT_REG: file.type = FILE_REGULAR; break;
@@ -100,6 +106,9 @@ Directory *directory_init(char *path) {
 
         size_t fname_size = strlen(file.name);
         dir->maxname = fname_size > dir->maxname ? fname_size : dir->maxname;
+
+        size_t digits = file.size == 0 ? 1 : (size_t) log10((double) file.size) + 1;
+        dir->maxsize = digits > dir->maxsize ? digits : dir->maxsize;
 
         dir->files[dir->len++] = file;
 
@@ -117,6 +126,26 @@ Directory *directory_init(char *path) {
 void directory_free(Directory *dir) {
     free(dir->files);
     free(dir);
+}
+
+void print_bottom_text(size_t height, size_t width, char *path, size_t cursor) {
+    time_t timer = time(NULL);
+    struct tm *datetime = localtime(&timer);
+
+    char time_buf[64];
+    strftime(time_buf, 64, "%d %b %Y, %R ", datetime);
+
+    size_t time_buf_len = strlen(time_buf);
+
+    attron(COLOR_PAIR(2));
+    mvprintw(height - 1, 0, " [Sakis Navigator] Path: %s, Cursor: %2lu", path, cursor);
+
+    while (getcurx(stdscr) < width - time_buf_len) {
+        addch(' ');
+    }
+
+    printw("%s", time_buf);
+    attroff(COLOR_PAIR(2));
 }
 
 int main() {
@@ -140,13 +169,7 @@ int main() {
     while (true) {
         clear();
 
-        char bottom_text[width + 1];
-        sprintf(bottom_text, " [Sakis Navigator] Path: %s, Cursor: %2lu", path, dir->cursor);
-        sprintf(bottom_text, "%s%-*s", bottom_text, (uint32_t) (width - strlen(bottom_text)), " ");
-
-        attron(COLOR_PAIR(2));
-        mvprintw(height - 1, 0, "%s", bottom_text);
-        attroff(COLOR_PAIR(2));
+        print_bottom_text(height, width, path, dir->cursor);
 
         size_t start = 0;
         if (dir->cursor >= height - 1) {
@@ -163,7 +186,7 @@ int main() {
             File *file = &dir->files[start + i];
             printw(" [%2d]  %-*s  %-10s", start + i, dir->maxname, file->name, FILE_TYPE_STR[file->type]);
             if (file->type == FILE_REGULAR) {
-                printw("  %lu KB ", file->size / 1024);
+                printw("  %*lu KB ", dir->maxsize, file->size);
             }
             
             if (i == dir->cursor || (start > 0 && i == height - 2)) {
@@ -178,19 +201,22 @@ int main() {
         input = getch();
 
         switch (input) {
-            case 'q': case 'Q': {
+            case 'q':
+            case 'Q': {
                 directory_free(dir);
                 free(path);
                 endwin();
                 return 0;
             }
-            case 'w': case 'W': {
+            case 'w':
+            case 'W': {
                 if (dir->cursor != 0) {
                     dir->cursor--;
                 }
             }
             break;
-            case 's': case 'S': {
+            case 's':
+            case 'S': {
                 if (dir->cursor != dir->len - 1) {
                     dir->cursor++;
                 }
